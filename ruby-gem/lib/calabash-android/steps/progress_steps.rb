@@ -33,7 +33,7 @@ Then /^I wait up to (\d+) seconds for "([^\"]*)" to appear$/ do |timeout, text|
 end
 
 Then /^I wait to see "([^\"]*)"$/ do |text|
-  performAction('wait_for_text', text)
+  performAction('wait_for_text', text, 5)
 end
 
 Then /^I wait up to (\d+) seconds to see "([^\"]*)"$/ do |timeout, text|
@@ -54,7 +54,7 @@ end
 
 
 Then /^I wait for the "([^\"]*)" screen to appear$/ do |text|
-    performAction('wait_for_screen', text)
+    performAction('wait_for_screen', text, 5)
 end
 
 Then /^I wait upto (\d+) seconds for the "([^\"]*)" screen to appear$/ do |timeout, text|
