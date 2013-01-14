@@ -4,36 +4,17 @@ import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
-import java.lang.reflect.Field;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.atomic.AtomicReference;
 
 import sh.calaba.instrumentationbackend.InstrumentationBackend;
+import sh.calaba.instrumentationbackend.actions.webview.CalabashChromeClient.WebFuture;
 import sh.calaba.org.codehaus.jackson.map.ObjectMapper;
 import android.webkit.WebView;
 
 public class QueryHelper {
 
-    public static String executeJavascriptInWebview(String scriptPath, String... args) {
-		
-		String script = readJavascriptFromAsset(scriptPath);
-
-		for (String arg : args) {
-			script = script.replaceFirst("%@", arg);
-		}
-
-		final String myScript = script;
-    	List<CalabashChromeClient> webViews = CalabashChromeClient.findAndPrepareWebViews();
-
-    	for (CalabashChromeClient ccc : webViews) {
-    	    WebView webView = ccc.getWebView();
-            webView.loadUrl("javascript:calabash_result = " + myScript + ";prompt('calabash:' + calabash_result);");
-			return ccc.getResult();
-		}
-    	throw new RuntimeException("No webviews found");
-	}
 	
 	@SuppressWarnings("unchecked")
 	public static Map<String, Object> findFirstVisibleRectangle(List<HashMap<String,Object>> elements) {
@@ -45,25 +26,36 @@ public class QueryHelper {
 		return (Map<String, Object>)elements.get(0);	
 	}
 	
-	public static float[] getScreenCoordinatesForCenter(Map<String, Object> rectangle) {
+	public static float translateCoordToScreen(int offset, float scale, Object point) {
+		return offset + ((Number)point).floatValue() *scale;
+	}
+	
+	public static Map<String, Object> translateRectToScreenCoordinates(WebView webView, Map<String, Object> rectangle) {
 		try {
 			
-			CalabashChromeClient calabashChromeClient = CalabashChromeClient.findAndPrepareWebViews().get(0);
-		
-			WebView webView = calabashChromeClient.getWebView();
-
-
             float scale = webView.getScale();
 
-
-			System.out.println("scale: " + scale);
 			int[] webviewLocation = new int[2];
 			webView.getLocationOnScreen(webviewLocation);
+			//center_x, center_y
+			//left, top, width, height
+			float center_x = translateCoordToScreen(webviewLocation[0], scale,
+					rectangle.get("center_x"));
+			float center_y = translateCoordToScreen(webviewLocation[1], scale,
+					rectangle.get("center_y"));
+									
+			float x = translateCoordToScreen(webviewLocation[0], scale, rectangle.get("left"));
+			float y = translateCoordToScreen(webviewLocation[0], scale, rectangle.get("top"));
+			Map<String,Object> result = new HashMap<String, Object>(rectangle);
 			
-			//TODO: Exception if center_x or center_y are not numbers
-			float x = webviewLocation[0] + ((Number)rectangle.get("center_x")).floatValue() * scale;
-			float y = webviewLocation[1] + ((Number)rectangle.get("center_y")).floatValue() * scale;
-			return new float[]{x, y};
+			result.put("x",x);
+			result.put("y",y);
+			result.put("center_x",center_x);
+			result.put("center_y",center_y);
+			
+			return result;
+			
+	
 		} catch (Exception e) {
 			throw new RuntimeException(e);
 		}
@@ -94,4 +86,19 @@ public class QueryHelper {
 		}
 		return script.toString();
     }
+	
+	public static WebFuture executeAsyncJavascriptInWebviews(WebView webView,
+			String scriptPath, String selector, String type) {
+
+		String script = readJavascriptFromAsset(scriptPath);
+
+		script = script.replaceFirst("%@", selector);
+		script = script.replaceFirst("%@", type);
+
+		CalabashChromeClient chromeClient = CalabashChromeClient.prepareWebView(webView);		
+        webView.loadUrl("javascript:calabash_result = " + script + ";prompt('calabash:' + calabash_result);");
+		return chromeClient.getResult();
+	}
+
+
 }

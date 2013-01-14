@@ -1,13 +1,11 @@
 package sh.calaba.instrumentationbackend;
 
-import java.io.BufferedWriter;
 import java.io.CharArrayWriter;
 import java.io.PrintWriter;
 import java.util.ArrayList;
 import java.util.List;
 
 public class Result {
-	private static Result successResult = new Result(true);
 	
     boolean success;
     String message;
@@ -24,7 +22,13 @@ public class Result {
 		this.success = success;
 		this.message = message;
     }
-    
+
+    public Result(boolean success, List<String> messages) {
+		this.success = success;
+		this.message = null;
+		this.bonusInformation = messages;
+    }
+
     public String getMessage() {
     	return message;
     }
@@ -62,7 +66,7 @@ public class Result {
     }
     
     public static Result successResult() {
-    	return successResult;
+    	return new Result(true);
     }
 
     public static Result failedResult() {

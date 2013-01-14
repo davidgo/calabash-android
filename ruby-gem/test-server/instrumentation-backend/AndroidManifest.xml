@@ -6,7 +6,7 @@
 
     <uses-sdk android:minSdkVersion="6" />
 
-    <application android:label="CalabashTestServer" >
+    <application android:label="CalabashTestServer" android:debuggable="true">
         <uses-library android:name="android.test.runner" />
         <uses-library android:name="com.google.android.maps" android:required="false" />
     </application>
@@ -14,9 +14,4 @@
     <instrumentation
         android:name="android.test.InstrumentationTestRunner"
         android:targetPackage="sh.calaba" />
-
-    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
-    <uses-permission android:name="android.permission.ACCESS_MOCK_LOCATION" />
-    <uses-permission android:name="android.permission.INTERNET" />
-
 </manifest>

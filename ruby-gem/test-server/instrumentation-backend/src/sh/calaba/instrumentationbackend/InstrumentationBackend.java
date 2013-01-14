@@ -1,16 +1,17 @@
 package sh.calaba.instrumentationbackend;
 
-import android.Manifest;
-import android.content.pm.PackageManager;
 import sh.calaba.instrumentationbackend.actions.Actions;
 import sh.calaba.instrumentationbackend.actions.HttpServer;
+import android.Manifest;
 import android.app.Activity;
 import android.app.Instrumentation;
 import android.content.Context;
-import android.test.ActivityInstrumentationTestCase2;
+import android.content.pm.PackageManager;
 import android.location.LocationManager;
+import android.test.ActivityInstrumentationTestCase2;
 import android.util.Log;
 
+import com.jayway.android.robotium.solo.PublicViewFetcher;
 import com.jayway.android.robotium.solo.SoloEnhanced;
 
 public class InstrumentationBackend extends ActivityInstrumentationTestCase2 {
@@ -21,6 +22,7 @@ public class InstrumentationBackend extends ActivityInstrumentationTestCase2 {
     
     public static Instrumentation instrumentation;
     public static SoloEnhanced solo;
+    public static PublicViewFetcher viewFetcher;
     public static Actions actions;
 
     public InstrumentationBackend() {
@@ -32,6 +34,7 @@ public class InstrumentationBackend extends ActivityInstrumentationTestCase2 {
         super.setUp();
         
         solo = new SoloEnhanced(getInstrumentation(), this.getActivity());
+        viewFetcher = new PublicViewFetcher(getInstrumentation(), this.getActivity());
         actions = new Actions(getInstrumentation(), this);
         instrumentation = getInstrumentation();
     }
@@ -44,6 +47,7 @@ public class InstrumentationBackend extends ActivityInstrumentationTestCase2 {
         httpServer.setReady();
         httpServer.waitUntilShutdown();
         solo.finishOpenedActivities();
+        System.exit(0);
     }
 
     @Override

@@ -5,17 +5,23 @@ def calabash_console(app_path = nil)
     ENV["TEST_SERVER_PORT"] = "34777"
   end
 
-  unless ENV["IRBRC"]
-    ENV["IRBRC"] = File.join(File.dirname(__FILE__), '..', 'irbrc')
-  end
+  ENV["IRBRC"] = File.join(File.dirname(__FILE__), '..', 'irbrc')
 
   unless ENV["PACKAGE_NAME"]
-    ENV["PACKAGE_NAME"] = package_name(app_path)  
+    ENV["PACKAGE_NAME"] = package_name(app_path)
   end
 
   unless ENV["MAIN_ACTIVITY"]
-    ENV["MAIN_ACTIVITY"] = main_activity(app_path)  
+    ENV["MAIN_ACTIVITY"] = main_activity(app_path)
   end
 
-  system "irb"
+  unless ENV["APP_PATH"]
+    ENV["APP_PATH"] = app_path
+  end
+
+  unless ENV["TEST_APP_PATH"]
+    ENV["TEST_APP_PATH"] = test_server_path
+  end
+
+  system "#{RbConfig.ruby} -S irb"
 end

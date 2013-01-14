@@ -51,6 +51,9 @@ Find the datepicker by content description and changes the date.
     Then /^I enter "([^\"]*)" into input field number (\d+)$/ do |text, number|
 Enters the specified text into the input field with index `number`.
 
+    Then /^I enter text "([^\"]*)" into field with id "([^\"]*)"$/ do |text, view_id|
+Enters Text into the input field with id `view_id`.
+
     Then /^I enter "([^\"]*)" as "([^\"]*)"$/ do |text, target|
     Then /^I enter "([^\"]*)" into "([^\"]*)"$/ do |text, target|
 Enters the specified text into the input field that has a content desciption that matches the provided target.
@@ -62,6 +65,9 @@ Finds a input field by index and blanks its value.
 
     Then /^I clear "([^\"]*)"$/ do |name|
 Finds a input field with matching content description and blanks its value.
+
+    Then /^I clear input field with id "([^\"]*)"$/ do |view_id|
+Finds the input field with id `view_id` and clears the text from it.
 
     Then /^I select "([^\"]*)" from "([^\"]*)"$/ do |item_text, spinner_content_description|
 Finds the Spinner by 'spinner_content_description' and selects the item with the matching 'item_text'
@@ -205,7 +211,7 @@ To take a screenshot of the phone while running the test use any of these steps.
 
 Location steps
 --------------
-If you app has the `ALLOW_MOCK_LOCATION` permission you can change the perceived location of the device by using any of these steps.
+If you allow your phone to use mocked locations (configured on your device under development settings) and your app has the `ACCESS_MOCK_LOCATION` permission you can change the perceived location of the device by using any of these steps.
 
 
 You can change the location any address or named location. This is done using the [geocoder gem](http://www.rubygeocoder.com/).

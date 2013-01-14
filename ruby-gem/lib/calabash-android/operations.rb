@@ -13,7 +13,6 @@ module Calabash module Android
 
 module Operations
 
-
   def log(message)
     $stdout.puts "#{Time.now.strftime("%Y-%m-%d %H:%M:%S")} - #{message}" if (ARGV.include? "-v" or ARGV.include? "--verbose")
   end
@@ -23,17 +22,22 @@ module Operations
   end
 
   def macro(txt)
-    if self.respond_to?:step
+    if self.respond_to?(:step)
       step(txt)
     else
       Then(txt)
     end
   end
+
   def default_device
     unless @default_device
       @default_device = Device.new(self, ENV["ADB_DEVICE_ARG"], ENV["TEST_SERVER_PORT"], ENV["APP_PATH"], ENV["TEST_APP_PATH"])
     end
     @default_device
+  end
+
+  def set_default_device(device)
+    @default_device = device
   end
 
   def performAction(action, *arguments)
@@ -53,7 +57,11 @@ module Operations
     default_device.wake_up()
   end
 
-  def start_test_server_in_background
+  def clear_app_data
+    default_device.clear_app_data
+  end
+
+  def start_test_server_in_background(options={})
     default_device.start_test_server_in_background()
   end
 
@@ -79,27 +87,44 @@ module Operations
   end
 
   def wait_for(timeout, &block)
+    value = nil
     begin
       Timeout::timeout(timeout) do
-        until block.call
+        until (value = block.call)
           sleep 0.3
         end
       end
     rescue Exception => e
-      take_screenshot
       raise e
     end
+    value
   end
 
   def query(uiquery, *args)
-    raise "Currently queries are only supported for webviews" unless uiquery.start_with? "webView"
+    converted_args = []
+    args.each do |arg|
+      if arg.is_a?(Hash) and arg.count == 1
+        converted_args << {:method_name => arg.keys.first, :arguments => [ arg.values.first ]}
+      else
+        converted_args << arg
+      end
+    end
+    map(uiquery,:query,*converted_args)
+  end
 
-    uiquery.slice!(0, "webView".length)
-    if uiquery =~ /(css|xpath):\s*(.*)/
-      r = performAction("query", $1, $2)
-      JSON.parse(r["message"])
-    else
-     raise "Invalid query #{uiquery}"
+  def each_item(opts={:query => "android.widget.ListView", :post_scroll => 0.2}, &block)
+    uiquery = opts[:query] || "android.widget.ListView"
+    skip_if = opts[:skip_if] || lambda { |i| false }
+    stop_when = opts[:stop_when] || lambda { |i| false }
+    check_element_exists(uiquery)
+    num_items = query(opts[:query], :adapter, :count).first
+    num_items.times do |item|
+      next if skip_if.call(item)
+      break if stop_when.call(item)
+
+      scroll_to_row(opts[:query], item)
+      sleep(opts[:post_scroll]) if opts[:post_scroll] and opts[:post_scroll] > 0
+      yield(item)
     end
   end
 
@@ -124,10 +149,6 @@ module Operations
 
   class Device
 
-    def make_default_device
-      @cucumber_world.default_device = self
-    end
-
     def initialize(cucumber_world, serial, server_port, app_path, test_server_path)
       @cucumber_world = cucumber_world
       @serial = serial
@@ -151,19 +172,29 @@ module Operations
       cmd = "#{adb_command} install \"#{app_path}\""
       log "Installing: #{app_path}"
       result = `#{cmd}`
-      if result.include? "Success"
-        log "Success"
-      else
-        log "#Failure"
-        log "'#{cmd}' said:"
-        log result.strip
-        raise "Could not install app #{app_path}: #{result.strip}"
+      log result
+      pn = package_name(app_path)
+      succeeded = `#{adb_command} shell pm list packages`.include?("package:#{pn}")
+
+      unless succeeded
+        Cucumber.wants_to_quit = true
+        raise "#{pn} did not get installed. Aborting!"
       end
     end
 
     def uninstall_app(package_name)
       log "Uninstalling: #{package_name}"
       log `#{adb_command} uninstall #{package_name}`
+    end
+
+    def app_running?
+      `#{adb_command} shell ps`.include?(ENV["PROCESS_NAME"] || package_name(@app_path))
+    end
+
+    def keyguard_enabled?
+      dumpsys = `#{adb_command} shell dumpsys window windows`
+      #If a line containing mCurrentFocus and Keyguard exists the keyguard is enabled
+      dumpsys.lines.any? { |l| l.include?("mCurrentFocus") and l.include?("Keyguard")}
     end
 
     def perform_action(action, *arguments)
@@ -173,7 +204,7 @@ module Operations
 
       Timeout.timeout(300) do
         begin
-          result = http("/", params)
+          result = http("/", params, {:read_timeout => 350})
         rescue Exception => e
           log "Error communicating with test server: #{e}"
           raise e
@@ -190,17 +221,19 @@ module Operations
       raise Exception, "Step timed out"
     end
 
-    def http(path, data = {})
-      retries = 0
+    def http(path, data = {}, options = {})
       begin
         http = Net::HTTP.new "127.0.0.1", @server_port
+        http.open_timeout = options[:open_timeout] if options[:open_timeout]
+        http.read_timeout = options[:read_timeout] if options[:read_timeout]
         resp = http.post(path, "#{data.to_json}", {"Content-Type" => "application/json;charset=utf-8"})
         resp.body
       rescue Exception => e
-        raise e if retries > 20
-        sleep 0.5
-        retries += 1
-        retry
+        if app_running?
+          raise e
+        else
+          raise "App no longer running"
+        end
       end
     end
 
@@ -280,19 +313,55 @@ module Operations
       log "Waking up device using:"
       log wake_up_cmd
       raise "Could not wake up the device" unless system(wake_up_cmd)
+
+      retriable :tries => 10, :interval => 1 do
+        raise "Could not remove the keyguard" if keyguard_enabled?
+      end
     end
 
-    def start_test_server_in_background
-      cmd = "#{adb_command} shell am instrument -e target_package #{ENV["PACKAGE_NAME"]} -e main_activity #{ENV["MAIN_ACTIVITY"]} -e class sh.calaba.instrumentationbackend.InstrumentationBackend sh.calaba.android.test/sh.calaba.instrumentationbackend.CalabashInstrumentationTestRunner"
+    def clear_app_data
+      cmd = "#{adb_command} shell am instrument sh.calaba.android.test/sh.calaba.instrumentationbackend.ClearAppData"
+      raise "Could not clear data" unless system(cmd)
+    end
+
+    def start_test_server_in_background(options={})
+      raise "Will not start test server because of previous failures." if Cucumber.wants_to_quit
+
+      if keyguard_enabled?
+        wake_up
+      end
+
+      env_options = {:target_package => options[:target_package] || package_name(@app_path),
+                     :main_activity => options[:main_activity] || main_activity(@app_path),
+                     :debug => options[:debug] || false,
+                     :class => options[:class] || "sh.calaba.instrumentationbackend.InstrumentationBackend"}
+
+      cmd_arr = [adb_command, "shell am instrument"]
+
+      env_options.each_pair do |key, val|
+        cmd_arr << "-e"
+        cmd_arr << key.to_s
+        cmd_arr << val.to_s
+      end
+
+      cmd_arr << "sh.calaba.android.test/sh.calaba.instrumentationbackend.CalabashInstrumentationTestRunner"
+
+      cmd = cmd_arr.join(" ")
+
       log "Starting test server using:"
       log cmd
       raise "Could not execute command to start test server" unless system("#{cmd} 2>&1")
 
+      retriable :tries => 10, :interval => 1 do
+        raise "App did not start" unless app_running?
+      end
+
       begin
         retriable :tries => 10, :interval => 3 do
             log "Checking if instrumentation backend is ready"
-            ready = http("/ready")
 
+            log "Is app running? #{app_running?}"
+            ready = http("/ready", {}, {:read_timeout => 1})
             if ready != "true"
               log "Instrumentation backend not yet ready"
               raise "Not ready"
@@ -343,8 +412,26 @@ module Operations
     raise(msg)
   end
 
-  def touch(uiquery,options={})
-    ni
+  def touch(uiquery,*args)
+    raise "Cannot touch nil" unless uiquery
+
+    if uiquery.instance_of? String
+      elements = query(uiquery, *args)
+      raise "No elements found" if elements.empty?
+      element = elements.first
+    else
+      element = uiquery
+      element = element.first if element.instance_of?(Array)
+    end
+
+
+    center_x = element["rect"]["center_x"]
+    center_y = element["rect"]["center_y"]
+    performAction("touch_coordinate", center_x, center_y)
+  end
+
+  def http(options, data=nil)
+    default_device.http(options, data)
   end
 
   def html(q)
@@ -381,7 +468,8 @@ module Operations
   end
 
   def scroll_to_row(uiquery,number)
-    ni
+    query(uiquery, {:smoothScrollToPosition => number})
+    puts "TODO:detect end of scroll - use sleep for now"
   end
 
   def pinch(in_out,options={})
@@ -396,12 +484,16 @@ module Operations
     ni
   end
 
+  def element_does_not_exist(uiquery)
+    query(uiquery).empty?
+  end
+
   def element_exists(uiquery)
-    !query(uiquery).empty?
+    not element_does_not_exist(uiquery)
   end
 
   def view_with_mark_exists(expected_mark)
-    element_exists( "view marked:'#{expected_mark}'" )
+    element_exists( "android.view.View marked:'#{expected_mark}'" )
   end
 
   def check_element_exists( query )
@@ -450,14 +542,20 @@ module Operations
     ni
   end
 
-  def map( query, method_name, *method_args )
-    ni
-  end
+  def map(query, method_name, *method_args)
+    operation_map = {
+        :method_name => method_name,
+        :arguments => method_args
+    }
+    res = http("/map",
+               {:query => query, :operation => operation_map})
+    res = JSON.parse(res)
+    if res['outcome'] != 'SUCCESS'
+      screenshot_and_raise "map #{query}, #{method_name} failed because: #{res['reason']}\n#{res['details']}"
+    end
 
-  def http(options, data=nil)
-    ni
+    res['results']
   end
-
 
   def url_for( verb )
     ni
