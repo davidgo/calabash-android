@@ -38,6 +38,19 @@ def test_server_path(apk_file_path)
   "test_servers/#{checksum(apk_file_path)}_#{Calabash::Android::VERSION}.apk"
 end
 
+
+def build_test_server_if_needed(app_path)
+  unless File.exist?(test_server_path(app_path))
+    if ARGV.include? "--no-build"
+      puts "No test server found for this combination of app and calabash version. Exiting!"
+      exit 1
+    else
+      puts "No test server found for this combination of app and calabash version. Recreating test server."
+      calabash_build(app_path)
+    end
+  end
+end
+
 def resign_apk(app_path)
   Dir.mktmpdir do |tmp_dir|
     log "Resign apk"
@@ -59,7 +72,7 @@ def sign_apk(app_path, dest_path)
     jarsigner_path = "jarsigner"
   end
 
-  cmd = "#{jarsigner_path} -sigalg MD5withRSA -digestalg SHA1 -signedjar #{dest_path} -storepass #{keystore["keystore_password"]} -keystore \"#{File.expand_path keystore["keystore_location"]}\" #{app_path} #{keystore["keystore_alias"]}"
+  cmd = "#{jarsigner_path} -sigalg MD5withRSA -digestalg SHA1 -signedjar #{dest_path} -storepass #{keystore["keystore_password"]} -keystore #{keystore["keystore_location"]} #{app_path} #{keystore["keystore_alias"]}"
   log cmd
   unless system(cmd)
     puts "jarsigner command: #{cmd}"
@@ -69,10 +82,12 @@ end
 
 def read_keystore_info
   if File.exist? ".calabash_settings"
-    JSON.parse(IO.read(".calabash_settings"))
+    keystore = JSON.parse(IO.read(".calabash_settings"))
+    keystore["keystore_location"] = '"' + File.expand_path(keystore["keystore_location"]) + '"' if keystore["keystore_location"]
+    keystore
   else
     {
-    "keystore_location" => "#{ENV["HOME"]}/.android/debug.keystore",
+    "keystore_location" => %Q("#{File.expand_path(File.join(ENV["HOME"], "/.android/debug.keystore"))}\"),
     "keystore_password" => "android",
     "keystore_alias" => "androiddebugkey",
     }
@@ -89,7 +104,8 @@ end
 
 def fingerprint_from_keystore
   keystore_info = read_keystore_info
-  cmd = "#{keytool_path} -v -list -alias #{keystore_info["keystore_alias"]} -keystore #{keystore_info["keystore_location"]} -storepass #{keystore_info["keystore_password"]}"
+  cmd = "#{keytool_path} -v -list -alias #{keystore_info["keystore_alias"]} -keystore \"#{keystore_info["keystore_location"]}\" -storepass #{keystore_info["keystore_password"]}"
+
   log cmd
   fingerprints = `#{cmd}`
   md5_fingerprint = extract_md5_fingerprint(fingerprints)
