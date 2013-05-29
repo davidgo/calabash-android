@@ -80,18 +80,48 @@ def sign_apk(app_path, dest_path)
   end
 end
 
+def tools_dir
+  dirs = Dir["#{android_home_path}/build-tools/*/"] + Dir["#{android_home_path}/platform-tools/"]
+  raise "Could not find tools directory in ANDROID_HOME" if dirs.empty?
+  dirs.first
+end
+
+def android_home_path
+  ENV["ANDROID_HOME"].gsub("\\", "/")
+end
+
 def read_keystore_info
+  keystore = default_keystore
+
   if File.exist? ".calabash_settings"
     keystore = JSON.parse(IO.read(".calabash_settings"))
-    keystore["keystore_location"] = '"' + File.expand_path(keystore["keystore_location"]) + '"' if keystore["keystore_location"]
-    keystore
-  else
-    {
-    "keystore_location" => %Q("#{File.expand_path(File.join(ENV["HOME"], "/.android/debug.keystore"))}\"),
+    fail_if_key_missing(keystore, "keystore_location")
+    fail_if_key_missing(keystore, "keystore_password")
+    fail_if_key_missing(keystore, "keystore_alias")
+    keystore["keystore_location"] = File.expand_path(keystore["keystore_location"])
+  end
+  keystore["keystore_location"] = put_in_quotes(remove_quotes(keystore["keystore_location"]))
+  keystore
+end
+
+def default_keystore
+  {
+    "keystore_location" => File.expand_path(File.join(ENV["HOME"], "/.android/debug.keystore")),
     "keystore_password" => "android",
     "keystore_alias" => "androiddebugkey",
-    }
-  end
+  }
+end
+
+def fail_if_key_missing(map, key)
+  raise "Found .calabash_settings but no #{key} defined." unless map[key]
+end
+
+def remove_quotes(s)
+  s.gsub(/"/, "")
+end
+
+def put_in_quotes(s)
+  %Q{"#{s}"}
 end
 
 def keytool_path
@@ -104,7 +134,7 @@ end
 
 def fingerprint_from_keystore
   keystore_info = read_keystore_info
-  cmd = "#{keytool_path} -v -list -alias #{keystore_info["keystore_alias"]} -keystore \"#{keystore_info["keystore_location"]}\" -storepass #{keystore_info["keystore_password"]}"
+  cmd = "#{keytool_path} -v -list -alias #{keystore_info["keystore_alias"]} -keystore #{keystore_info["keystore_location"]} -storepass #{keystore_info["keystore_password"]}"
 
   log cmd
   fingerprints = `#{cmd}`
@@ -138,13 +168,7 @@ end
 def extract_md5_fingerprint(fingerprints)
   log fingerprints
 
-  if is_windows?
-    if fingerprints.encoding.name == "CP850"
-      fingerprints = fingerprints.gsub("\xA0".force_encoding("CP850"),"")
-    end
-  end
-
-  m = fingerprints.scan(/MD5\s*:\s*((?:[a-fA-F\d]{2}:){15}[a-fA-F\d]{2})/).flatten
+  m = fingerprints.scan(/MD5.*((?:[a-fA-F\d]{2}:){15}[a-fA-F\d]{2})/).flatten
   raise "No MD5 fingerprint found:\n #{fingerprints}" if m.empty?
   m.first
 end

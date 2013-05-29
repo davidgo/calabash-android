@@ -7,6 +7,7 @@ require 'socket'
 require 'timeout'
 require 'calabash-android/helpers'
 require 'calabash-android/wait_helpers'
+require 'calabash-android/touch_helpers'
 require 'calabash-android/version'
 require 'retriable'
 require 'cucumber'
@@ -16,13 +17,14 @@ module Calabash module Android
 
 module Operations
   include Calabash::Android::WaitHelpers
+  include Calabash::Android::TouchHelpers
+
+  def current_activity
+    `#{default_device.adb_command} shell dumpsys window windows`.each_line.grep(/mFocusedApp.+[\.\/]([^.\/\}]+)\}/){$1}.first
+  end
 
   def log(message)
     $stdout.puts "#{Time.now.strftime("%Y-%m-%d %H:%M:%S")} - #{message}" if (ARGV.include? "-v" or ARGV.include? "--verbose")
-  end
-
-  def take_screenshot
-    default_device.take_screenshot
   end
 
   def macro(txt)
@@ -61,8 +63,8 @@ module Operations
   end
 
   def uninstall_apps
-    default_device.uninstall_app("sh.calaba.android.test")
-    default_device.uninstall_app(ENV["PACKAGE_NAME"])
+    default_device.uninstall_app(package_name(default_device.test_server_path))
+    default_device.uninstall_app(package_name(default_device.app_path))
   end
 
   def wake_up
@@ -73,8 +75,16 @@ module Operations
     default_device.clear_app_data
   end
 
+  def pull(remote, local)
+    default_device.pull(remote, local)
+  end
+
+  def push(local, remote)
+    default_device.push(local, remote)
+  end
+
   def start_test_server_in_background(options={})
-    default_device.start_test_server_in_background()
+    default_device.start_test_server_in_background(options)
   end
 
   def shutdown_test_server
@@ -90,6 +100,10 @@ module Operations
     default_device.screenshot(options)
   end
 
+  def fail(msg="Error. Check log for details.", options={:prefix => nil, :name => nil, :label => nil})
+   screenshot_and_raise(msg, options)
+  end
+
   def set_gps_coordinates_from_location(location)
     default_device.set_gps_coordinates_from_location(location)
   end
@@ -97,20 +111,6 @@ module Operations
   def set_gps_coordinates(latitude, longitude)
     default_device.set_gps_coordinates(latitude, longitude)
   end
-
-  #def wait_for(timeout, &block)
-  #  value = nil
-  #  begin
-  #    Timeout::timeout(timeout) do
-  #      until (value = block.call)
-  #        sleep 0.3
-  #      end
-  #    end
-  #  rescue Exception => e
-  #    raise e
-  #  end
-  #  value
-  #end
 
   def query(uiquery, *args)
     converted_args = []
@@ -146,6 +146,14 @@ module Operations
 
   ###
 
+  ### simple page object helper
+
+  def page(clz, *args)
+    clz.new(self, *args)
+  end
+
+  ###
+
   ### app life cycle
   def connect_to_test_server
     puts "Explicit calls to connect_to_test_server should be removed."
@@ -160,15 +168,18 @@ module Operations
   end
 
   class Device
+    attr_reader :app_path, :test_server_path, :serial, :server_port, :test_server_port
 
-    def initialize(cucumber_world, serial, server_port, app_path, test_server_path)
+    def initialize(cucumber_world, serial, server_port, app_path, test_server_path, test_server_port = 7102)
+
       @cucumber_world = cucumber_world
       @serial = serial
       @server_port = server_port
       @app_path = app_path
       @test_server_path = test_server_path
+      @test_server_port = test_server_port
 
-      forward_cmd = "#{adb_command} forward tcp:#{server_port} tcp:7102"
+      forward_cmd = "#{adb_command} forward tcp:#{@server_port} tcp:#{@test_server_port}"
       log forward_cmd
       log `#{forward_cmd}`
     end
@@ -204,7 +215,11 @@ module Operations
     end
 
     def app_running?
-      `#{adb_command} shell ps`.include?(ENV["PROCESS_NAME"] || package_name(@app_path))
+      begin
+        http("/ping") == "pong"
+      rescue
+        false
+      end
     end
 
     def keyguard_enabled?
@@ -244,31 +259,9 @@ module Operations
         http.read_timeout = options[:read_timeout] if options[:read_timeout]
         resp = http.post(path, "#{data.to_json}", {"Content-Type" => "application/json;charset=utf-8"})
         resp.body
-      rescue Exception => e
-        if app_running?
+      rescue EOFError => e
+          log "It looks like your app is no longer running. \nIt could be because of a crash or because your test script shut it down."
           raise e
-        else
-          raise "App no longer running"
-        end
-      end
-    end
-
-    def take_screenshot
-      puts "take_screenshot is deprecated. Use screenshot_embed instead."
-      path = ENV["SCREENSHOT_PATH_PREFIX"] || "results"
-      FileUtils.mkdir_p path unless File.exist? path
-      filename_prefix = FeatureNameMemory.feature_name.gsub(/\s+/, '_').downcase
-      begin
-        Timeout.timeout(30) do
-          file_name = "#{path}/#{filename_prefix}_#{FeatureNameMemory.invocation}_#{StepCounter.step_line}.png"
-          image = http("/screenshot")
-          open(file_name ,"wb") { |file|
-            file.write(image)
-          }
-          log "Screenshot stored in: #{file_name}!!!"
-        end
-      rescue Timeout::Error
-        raise Exception, "take_screenshot timed out"
       end
     end
 
@@ -287,12 +280,7 @@ module Operations
       @@screenshot_count ||= 0
       path = "#{prefix}#{name}_#{@@screenshot_count}.png"
 
-      if ENV["SCREENSHOT_VIA_USB"] == "true"
-        device_args = "-s #{@serial}" if @serial
-        screenshot_cmd = "java -jar #{File.join(File.dirname(__FILE__), 'lib', 'screenShotTaker.jar')} #{path} #{device_args}"
-        log screenshot_cmd
-        raise "Could not take screenshot" unless system(screenshot_cmd)
-      else
+      if ENV["SCREENSHOT_VIA_USB"] == "false"
         begin
           res = http("/screenshot")
         rescue EOFError
@@ -301,31 +289,48 @@ module Operations
         File.open(path, 'wb') do |f|
           f.write res
         end
+      else
+        screenshot_cmd = "java -jar #{File.join(File.dirname(__FILE__), 'lib', 'screenshotTaker.jar')} #{serial} #{path}"
+        log screenshot_cmd
+        raise "Could not take screenshot" unless system(screenshot_cmd)
       end
-
 
       @@screenshot_count += 1
       path
     end
 
     def adb_command
+      "#{adb} -s #{serial}"
+    end
+
+    def adb
       if is_windows?
-        %Q("#{ENV["ANDROID_HOME"]}\\platform-tools\\adb.exe" #{device_args})
+        %Q("#{ENV["ANDROID_HOME"]}\\platform-tools\\adb.exe")
       else
-        %Q("#{ENV["ANDROID_HOME"]}/platform-tools/adb" #{device_args})
+        %Q("#{ENV["ANDROID_HOME"]}/platform-tools/adb")
       end
     end
 
-    def device_args
-      if @serial
-        "-s #{@serial}"
-      else
-        ""
-      end
+    def serial
+      @serial || default_serial
     end
+
+    def default_serial
+      devices = connected_devices
+      log "connected_devices: #{devices}"
+      raise "No connected devices" if devices.empty?
+      raise "More than one device connected. Specify device serial using ADB_DEVICE_ARG" if devices.length > 1
+      devices.first
+    end
+
+    def connected_devices
+      lines = `#{adb} devices`.split("\n")
+      lines.shift
+      lines.collect { |l| l.split("\t").first}
+    end  
 
     def wake_up
-      wake_up_cmd = "#{adb_command} shell am start -a android.intent.action.MAIN -n sh.calaba.android.test/sh.calaba.instrumentationbackend.WakeUp"
+      wake_up_cmd = "#{adb_command} shell am start -a android.intent.action.MAIN -n #{package_name(@test_server_path)}/sh.calaba.instrumentationbackend.WakeUp"
       log "Waking up device using:"
       log wake_up_cmd
       raise "Could not wake up the device" unless system(wake_up_cmd)
@@ -336,8 +341,18 @@ module Operations
     end
 
     def clear_app_data
-      cmd = "#{adb_command} shell am instrument sh.calaba.android.test/sh.calaba.instrumentationbackend.ClearAppData"
+      cmd = "#{adb_command} shell am instrument #{package_name(@test_server_path)}/sh.calaba.instrumentationbackend.ClearAppData"
       raise "Could not clear data" unless system(cmd)
+    end
+
+    def pull(remote, local)
+      cmd = "#{adb_command} pull #{remote} #{local}"
+      raise "Could not pull #{remote} to #{local}" unless system(cmd)
+    end
+
+    def push(local, remote)
+      cmd = "#{adb_command} push #{local} #{remote}"
+      raise "Could not push #{local} to #{remote}" unless system(cmd)
     end
 
     def start_test_server_in_background(options={})
@@ -347,10 +362,13 @@ module Operations
         wake_up
       end
 
-      env_options = {:target_package => options[:target_package] || package_name(@app_path),
-                     :main_activity => options[:main_activity] || main_activity(@app_path),
-                     :debug => options[:debug] || false,
-                     :class => options[:class] || "sh.calaba.instrumentationbackend.InstrumentationBackend"}
+      env_options = {:target_package => package_name(@app_path),
+                     :main_activity => main_activity(@app_path),
+                     :test_server_port => @test_server_port,
+                     :debug => false,
+                     :class => "sh.calaba.instrumentationbackend.InstrumentationBackend"}
+
+      env_options = env_options.merge(options)
 
       cmd_arr = [adb_command, "shell am instrument"]
 
@@ -360,7 +378,7 @@ module Operations
         cmd_arr << val.to_s
       end
 
-      cmd_arr << "sh.calaba.android.test/sh.calaba.instrumentationbackend.CalabashInstrumentationTestRunner"
+      cmd_arr << "#{package_name(@test_server_path)}/sh.calaba.instrumentationbackend.CalabashInstrumentationTestRunner"
 
       cmd = cmd_arr.join(" ")
 
@@ -421,6 +439,11 @@ module Operations
     def shutdown_test_server
       begin
         http("/kill")
+        Timeout::timeout(3) do
+          sleep 0.3 while app_running?
+        end
+      rescue Timeout::Error
+        log ("Could not kill app. Waited to 3 seconds.")
       rescue EOFError
         log ("Could not kill app. App is most likely not running anymore.")
       end

@@ -9,7 +9,7 @@ import sh.calaba.instrumentationbackend.actions.HttpServer;
 
 public class CalabashInstrumentationTestRunner extends InstrumentationTestRunner {
 	@Override
-    public void onCreate(Bundle arguments) {		
+    public void onCreate(Bundle arguments) {
 		try {
 			Context context = getTargetContext ();
 			Class<?> c = Class.forName("mono.MonoPackageManager");
@@ -21,9 +21,10 @@ public class CalabashInstrumentationTestRunner extends InstrumentationTestRunner
 		}
 
         // Start the HttpServer as soon as possible in a not-ready state
-        HttpServer.instantiate();
+        HttpServer.instantiate(Integer.parseInt(arguments.getString("test_server_port")));
 
         InstrumentationBackend.testPackage = arguments.getString("target_package");
+        InstrumentationBackend.extras = arguments;
 
         try {
             InstrumentationBackend.mainActivity = Class.forName(arguments.getString("main_activity"));
